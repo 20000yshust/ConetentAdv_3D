@@ -61,6 +61,22 @@ def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test'):
     pil_img.save(prefix + '.png')
 
 
+
+def prev_step(model, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray]):
+    prev_timestep = timestep - model.scheduler.config.num_train_timesteps // model.scheduler.num_inference_steps
+    alpha_prod_t = model.scheduler.alphas_cumprod[timestep]
+    alpha_prod_t_prev = model.scheduler.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else model.scheduler.final_alpha_cumprod
+    beta_prod_t = 1 - alpha_prod_t
+    pred_original_sample = (sample.cuda() - beta_prod_t.cuda() ** 0.5 * model_output) / alpha_prod_t.cuda() ** 0.5
+    pred_sample_direction = (1 - alpha_prod_t_prev.cuda()) ** 0.5 * model_output
+    prev_sample = alpha_prod_t_prev.cuda() ** 0.5 * pred_original_sample.cuda() + pred_sample_direction.cuda()
+    return prev_sample
+
+
+
+
+
+
 def diffusion_step(model, controller, latents, context, t, guidance_scale, low_resource=False):
     if low_resource:
         noise_pred_uncond = model.unet(latents, t, encoder_hidden_states=context[0])["sample"]
@@ -68,11 +84,12 @@ def diffusion_step(model, controller, latents, context, t, guidance_scale, low_r
     else:
         # print("Latent: ", latents.shape, latents.requires_grad)
         latents_input = torch.cat([latents] * 2)
+        t=torch.full((1,), t, dtype=torch.long).cuda()
         # print("Latent_input: ", latents_input.shape, latents_input.requires_grad)
-        noise_pred = model.unet(latents_input, t, encoder_hidden_states=context)["sample"]
+        noise_pred=model.apply_model(latents_input,t,context)
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
     noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
-    latents = model.scheduler.step(noise_pred, t, latents)["prev_sample"]
+    latents = prev_step(model,noise_pred, t, latents)
     latents = controller.step_callback(latents)
     return latents
 
@@ -89,11 +106,11 @@ def latent2image(vae, latents):
 def init_latent(latent, model, height, width, generator, batch_size):
     if latent is None:
         latent = torch.randn(
-            (1, model.unet.in_channels, height // 8, width // 8),
+            (1, 4, height // 8, width // 8),
             generator=generator,
         )
         print(latent.shape)
-    latents = latent.expand(batch_size,  model.unet.in_channels, height // 8, width // 8).to(model.device)
+    latents = latent.expand(batch_size,  4, height // 8, width // 8).to(model.device)
     print("init:",latents.shape)
     return latent, latents
 
