@@ -412,9 +412,9 @@ class NullInversion:
         alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
         alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else self.scheduler.final_alpha_cumprod
         beta_prod_t = 1 - alpha_prod_t
-        pred_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
-        pred_sample_direction = (1 - alpha_prod_t_prev) ** 0.5 * model_output
-        prev_sample = alpha_prod_t_prev ** 0.5 * pred_original_sample + pred_sample_direction
+        pred_original_sample = (sample.to(device) - beta_prod_t.to(device) ** 0.5 * model_output) / alpha_prod_t.to(device) ** 0.5
+        pred_sample_direction = (1 - alpha_prod_t_prev.to(device)) ** 0.5 * model_output
+        prev_sample = alpha_prod_t_prev.to(device) ** 0.5 * pred_original_sample.to(device) + pred_sample_direction.to(device)
         return prev_sample
     
     def next_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray]):
@@ -422,9 +422,9 @@ class NullInversion:
         alpha_prod_t = self.scheduler.alphas_cumprod[timestep] if timestep >= 0 else self.scheduler.final_alpha_cumprod
         alpha_prod_t_next = self.scheduler.alphas_cumprod[next_timestep]
         beta_prod_t = 1 - alpha_prod_t
-        next_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
-        next_sample_direction = (1 - alpha_prod_t_next) ** 0.5 * model_output
-        next_sample = alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
+        next_original_sample = (sample.to(device) - beta_prod_t.to(device) ** 0.5 * model_output.to(device)) / alpha_prod_t.to(device) ** 0.5
+        next_sample_direction = (1 - alpha_prod_t_next.to(device)) ** 0.5 * model_output
+        next_sample = alpha_prod_t_next.to(device) ** 0.5 * next_original_sample.to(device) + next_sample_direction.to(device)
         return next_sample
     
     def get_noise_pred_single(self, latents, t, context):
@@ -440,7 +440,11 @@ class NullInversion:
         if context is None:
             context = self.context
         guidance_scale = 1 if is_forward else GUIDANCE_SCALE
-        noise_pred = self.model.unet(latents_input, t, encoder_hidden_states=context)["sample"]
+        # noise_pred = self.model.unet(latents_input, t, encoder_hidden_states=context)["sample"]
+        cond={}
+        cond["c_concat"]=[torch.cat([self.latents_image] * 2)]
+        cond["c_crossattn"]=[context]
+        noise_pred=self.model.apply_model(latents_input,t,cond)
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
         if is_forward:
@@ -524,13 +528,13 @@ class NullInversion:
         all_latent = [latent]
         latent = latent.clone().detach()
         # sampler = DDIMSampler(self.model)
-        timesteps=[981, 961, 941, 921, 901, 881, 861, 841, 821, 801, 781, 761, 741, 721,
-        701, 681, 661, 641, 621, 601, 581, 561, 541, 521, 501, 481, 461, 441,
-        421, 401, 381, 361, 341, 321, 301, 281, 261, 241, 221, 201, 181, 161,
-        141, 121, 101,  81,  61,  41,  21,   1]
+        # timesteps=[981, 961, 941, 921, 901, 881, 861, 841, 821, 801, 781, 761, 741, 721,
+        # 701, 681, 661, 641, 621, 601, 581, 561, 541, 521, 501, 481, 461, 441,
+        # 421, 401, 381, 361, 341, 321, 301, 281, 261, 241, 221, 201, 181, 161,
+        # 141, 121, 101,  81,  61,  41,  21,   1]
         print(self.model.num_timesteps)
         for i in range(NUM_DDIM_STEPS):
-            t = timesteps[len(timesteps) - i - 1]
+            t = self.model.scheduler.timesteps[len(self.model.scheduler.timesteps) - i - 1]
             t=torch.full((1,), t, device=device, dtype=torch.long)
             noise_pred = self.get_noise_pred_single(latent, t, cond_embeddings)
             latent = self.next_step(noise_pred, t, latent)
@@ -559,6 +563,7 @@ class NullInversion:
             optimizer = Adam([uncond_embeddings], lr=1e-2 * (1. - i / 100.))
             latent_prev = latents[len(latents) - i - 2]
             t = self.model.scheduler.timesteps[i]
+            t=torch.full((1,), t, device=device, dtype=torch.long)
             with torch.no_grad():
                 noise_pred_cond = self.get_noise_pred_single(latent_cur, t, cond_embeddings)
             for j in range(num_inner_steps):
@@ -578,6 +583,7 @@ class NullInversion:
             uncond_embeddings_list.append(uncond_embeddings[:1].detach())
             with torch.no_grad():
                 context = torch.cat([uncond_embeddings, cond_embeddings])
+                # print(context)
                 latent_cur = self.get_noise_pred(latent_cur, t, False, context)
         bar.close()
         return uncond_embeddings_list
@@ -602,11 +608,10 @@ class NullInversion:
         
     
     def __init__(self, model):
-        scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False,
-                                  set_alpha_to_one=False)
+        scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
         self.model = model
         # self.tokenizer = self.model.tokenizer
-        # self.model.scheduler.set_timesteps(NUM_DDIM_STEPS)
+        self.model.scheduler.set_timesteps(NUM_DDIM_STEPS)
         self.prompt = None
         # self.context = None
         self.latents_image=None
@@ -620,7 +625,7 @@ class NullInversion:
 @torch.no_grad()
 def text2image_ldm_stable(
     model,
-    prompt:  List[str],
+    prompt,
     controller,
     num_inference_steps: int = 50,
     guidance_scale: Optional[float] = 7.5,
@@ -630,50 +635,75 @@ def text2image_ldm_stable(
     start_time=50,
     return_type='image'
 ):
-    batch_size = len(prompt)
+    batch_size = 1
     ptp_utils.register_attention_control(model, controller)
-    height = width = 512
+    height = width = 256
     
-    text_input = model.tokenizer(
-        prompt,
-        padding="max_length",
-        max_length=model.tokenizer.model_max_length,
-        truncation=True,
-        return_tensors="pt",
-    )
-    text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
-    max_length = text_input.input_ids.shape[-1]
-    if uncond_embeddings is None:
-        uncond_input = model.tokenizer(
-            [""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt"
-        )
-        uncond_embeddings_ = model.text_encoder(uncond_input.input_ids.to(model.device))[0]
-    else:
-        uncond_embeddings_ = None
+    # text_input = model.tokenizer(
+    #     prompt,
+    #     padding="max_length",
+    #     max_length=model.tokenizer.model_max_length,
+    #     truncation=True,
+    #     return_tensors="pt",
+    # )
+    # text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
+    # max_length = text_input.input_ids.shape[-1]
+    #add for zero123
+    # print(image_gt)
+    # print(image_gt.shape)
+
+    n_samples=1
+    c = model.get_learned_conditioning(prompt).tile(n_samples, 1, 1)
+    u_c=model.get_learned_conditioning(torch.zeros(prompt.shape).to(device)).tile(n_samples, 1, 1)
+    T = torch.tensor([0, 0, 0, 0])
+    T = T[None, None, :].repeat(n_samples, 1, 1).to(c.device)
+    c = torch.cat([c, T], dim=-1)
+    c = model.cc_projection(c)
+    u_c=torch.cat([u_c,T],dim=-1)
+    u_c=model.cc_projection(u_c)
+
+
+    # if uncond_embeddings is None:
+    #     uncond_input = model.tokenizer(
+    #         [""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt"
+    #     )
+    #     uncond_embeddings_ = model.text_encoder(uncond_input.input_ids.to(model.device))[0]
+    # else:
+    #     uncond_embeddings_ = None
 
     latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)
     model.scheduler.set_timesteps(num_inference_steps)
+    n_samples=1
+    latents=model.encode_first_stage((prompt.to(device))).mode().detach()\
+                        .repeat(n_samples, 1, 1, 1)
     for i, t in enumerate(tqdm(model.scheduler.timesteps[-start_time:])):
-        if uncond_embeddings_ is None:
-            context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
-        else:
-            context = torch.cat([uncond_embeddings_, text_embeddings])
-        latents = ptp_utils.diffusion_step(model, controller, latents, context, t, guidance_scale, low_resource=False)
+        # if uncond_embeddings_ is None:
+        #     context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
+        # else:
+        #     context = torch.cat([uncond_embeddings_, text_embeddings])
+        cond={}
+        cond["c_concat"]=[torch.cat([latents] * 2)]
+        cond["c_crossattn"]=[torch.cat([u_c,c])]
+
+        latents = ptp_utils.diffusion_step(model, controller, latents, cond, t, guidance_scale, low_resource=False)
         
     if return_type == 'image':
-        image = ptp_utils.latent2image(model.vae, latents)
+        image = model.decode_first_stage(latents)
+        image=torch.clamp((image + 1.0) / 2.0, min=0.0, max=1.0)
+        image=image.cpu().permute(0, 2, 3, 1).numpy()
+        image=(image * 255).astype(np.uint8)
     else:
         image = latents
     return image, latent
 
 
 
-def run_and_display(prompts, controller, latent=None, run_baseline=False, generator=None, uncond_embeddings=None, verbose=True, prefix='inversion'):
+def run_and_display(prompts=None, controller=None, latent=None, run_baseline=False, generator=None, uncond_embeddings=None, verbose=True, prefix='inversion'):
     if run_baseline:
         print("w.o. prompt-to-prompt")
         images, latent = run_and_display(prompts, EmptyControl(), latent=latent, run_baseline=False, generator=generator)
         print("with prompt-to-prompt")
-    images, x_t = text2image_ldm_stable(ldm_stable, prompts, controller, latent=latent, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings)
+    images, x_t = text2image_ldm_stable(model, prompts, controller, latent=latent, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings)
     if verbose:
         ptp_utils.view_images(images, prefix=prefix)
     return images, x_t
@@ -728,13 +758,14 @@ if __name__ == '__main__':
     config = OmegaConf.load(config)
     model = load_model_from_config(config, ckpt, device=device)
     # print(model)
+    model.scheduler=scheduler
     null_inversion = NullInversion(model)
 
 
     # Batch Images Load
     image_nums = 1
     # all_prompts = open('temp_2/1/prompts.txt').readlines()
-    all_latents = torch.zeros(image_nums, 4, 64, 64)
+    all_latents = torch.zeros(image_nums, 4, 32, 32)
     all_uncons = torch.zeros(image_nums, NUM_DDIM_STEPS, 77, 768)
 
     img_filepath = '/home/chenyangsen/kinneyyang/Adversarial_Content_Attack/third_party/Natural-Color-Fool/dataset/ast'
@@ -760,12 +791,12 @@ if __name__ == '__main__':
             all_uncons[idx][k] = uncond_embeddings[k]
 
         controller = AttentionStore()
-        image_inv, x_t = run_and_display(prompts, controller, run_baseline=False, latent=x_t, uncond_embeddings=uncond_embeddings, verbose=False)
+        image_inv, x_t = run_and_display(image_gt, controller, run_baseline=False, latent=x_t, uncond_embeddings=uncond_embeddings, verbose=False)
         print("showing from left to right: the ground truth image, the vq-autoencoder reconstruction, the null-text inverted image")
-        ptp_utils.view_images([image_gt, image_inv[0]], prefix='1/pair/%d' % (idx))
-        ptp_utils.view_images([image_gt], prefix='1/original/%d' % (idx))
+        ptp_utils.view_images([image_inv[0]], prefix='1/pair/%d' % (idx))
+        # ptp_utils.view_images([image_gt], prefix='1/original/%d' % (idx))
         ptp_utils.view_images([image_inv[0]], prefix='1/inversion/%d' % (idx))
 
 
-    torch.save(all_latents, 'temp_2/1/all_latents.pth')
-    torch.save(all_uncons, 'temp_2/1/all_uncons.pth')
+    # torch.save(all_latents, 'temp_2/1/all_latents.pth')
+    # torch.save(all_uncons, 'temp_2/1/all_uncons.pth')
