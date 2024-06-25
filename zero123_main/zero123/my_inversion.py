@@ -613,6 +613,9 @@ class NullInversion:
             latents=self.model.encode_first_stage((image.to(device))).mode().detach()\
                                .repeat(n_samples, 1, 1, 1)
             self.latents_image=latents
+            latents=self.model.encode_first_stage((image.to(device))).mode().detach()\
+                               .repeat(n_samples, 1, 1, 1)
+            latents = latents * 0.18215
         return latents
 
     @torch.no_grad()
@@ -823,8 +826,9 @@ def text2image_ldm_stable(
         latents = ptp_utils.diffusion_step(model, controller, latents, cond, t, guidance_scale, low_resource=False)
         
     if return_type == 'image':
+        latents = 1 / 0.18215 * latents
         image = model.decode_first_stage(latents)
-        image=torch.clamp((image + 1.0) / 2.0, min=0.0, max=1.0)
+        image=torch.clamp((image / 2 + 0.5), min=0.0, max=1.0)
         image=image.cpu().permute(0, 2, 3, 1).numpy()
         image=(image * 255).astype(np.uint8)
     else:
@@ -932,8 +936,11 @@ if __name__ == '__main__':
         image_gt=image_gt.cpu().permute(0, 2, 3, 1).numpy()
         image_gt=(image_gt * 255).astype(np.uint8)
         print(image_gt.shape)
+        image_enc=torch.clamp((image_enc + 1.0) / 2.0, min=0.0, max=1.0)
+        image_enc=image_enc.cpu().permute(0, 2, 3, 1).numpy()
+        image_enc=(image_enc * 255).astype(np.uint8)
         print("showing from left to right: the ground truth image, the vq-autoencoder reconstruction, the null-text inverted image")
-        ptp_utils.view_images([image_inv[0]], prefix='1/pair/%d' % (idx))
+        ptp_utils.view_images([image_enc[0]], prefix='1/pair/%d' % (idx))
         ptp_utils.view_images([image_gt[0]], prefix='1/original/%d' % (idx))
         ptp_utils.view_images([image_inv[0]], prefix='1/inversion/%d' % (idx))
 
