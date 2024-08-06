@@ -497,60 +497,80 @@ class NullInversion:
         setattr(self, name, attr)
 
 
-    def prev_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray],index:int):
-        # prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
-        # alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
-        # alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else self.scheduler.final_alpha_cumprod
-        # beta_prod_t = 1 - alpha_prod_t
-        # pred_original_sample = (sample.to(device) - beta_prod_t.to(device) ** 0.5 * model_output) / alpha_prod_t.to(device) ** 0.5
-        # pred_sample_direction = (1 - alpha_prod_t_prev.to(device)) ** 0.5 * model_output
-        # prev_sample = alpha_prod_t_prev.to(device) ** 0.5 * pred_original_sample.to(device) + pred_sample_direction.to(device)
-        # return prev_sample
-        alphas = self.ddim_alphas
-        alphas_prev = self.ddim_alphas_prev
-        sqrt_one_minus_alphas = self.ddim_sqrt_one_minus_alphas
-        sigmas = self.ddim_sigmas
-        # select parameters corresponding to the currently considered timestep
-        a_t = torch.full((1, 1, 1, 1), alphas[index], device=device)
-        a_prev = torch.full((1, 1, 1, 1), alphas_prev[index], device=device)
-        sigma_t = torch.full((1, 1, 1, 1), sigmas[index], device=device)
-        sqrt_one_minus_at = torch.full((1, 1, 1, 1), sqrt_one_minus_alphas[index],device=device)
+    # def prev_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray],index:int):
+    #     # prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
+    #     # alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
+    #     # alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else self.scheduler.final_alpha_cumprod
+    #     # beta_prod_t = 1 - alpha_prod_t
+    #     # pred_original_sample = (sample.to(device) - beta_prod_t.to(device) ** 0.5 * model_output) / alpha_prod_t.to(device) ** 0.5
+    #     # pred_sample_direction = (1 - alpha_prod_t_prev.to(device)) ** 0.5 * model_output
+    #     # prev_sample = alpha_prod_t_prev.to(device) ** 0.5 * pred_original_sample.to(device) + pred_sample_direction.to(device)
+    #     # return prev_sample
+    #     alphas = self.ddim_alphas
+    #     alphas_prev = self.ddim_alphas_prev
+    #     sqrt_one_minus_alphas = self.ddim_sqrt_one_minus_alphas
+    #     sigmas = self.ddim_sigmas
+    #     # select parameters corresponding to the currently considered timestep
+    #     a_t = torch.full((1, 1, 1, 1), alphas[index], device=device)
+    #     a_prev = torch.full((1, 1, 1, 1), alphas_prev[index], device=device)
+    #     sigma_t = torch.full((1, 1, 1, 1), sigmas[index], device=device)
+    #     sqrt_one_minus_at = torch.full((1, 1, 1, 1), sqrt_one_minus_alphas[index],device=device)
 
-        # current prediction for x_0
-        pred_x0 = (sample - sqrt_one_minus_at * model_output) / a_t.sqrt()
-        # direction pointing to x_t
-        dir_xt = (1. - a_prev - sigma_t**2).sqrt() * model_output
-        noise = sigma_t * noise_like(sample.shape, device, False) * 1
-        x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
-        return x_prev
+    #     # current prediction for x_0
+    #     pred_x0 = (sample - sqrt_one_minus_at * model_output) / a_t.sqrt()
+    #     # direction pointing to x_t
+    #     dir_xt = (1. - a_prev - sigma_t**2).sqrt() * model_output
+    #     noise = sigma_t * noise_like(sample.shape, device, False) * 1
+    #     x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
+    #     return x_prev
+
+    def prev_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray]):
+        prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
+        alpha_prod_t = self.scheduler.alphas_cumprod[timestep].cuda()
+        alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_timestep].cuda() if prev_timestep >= 0 else self.scheduler.final_alpha_cumprod
+        beta_prod_t = 1 - alpha_prod_t
+        pred_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
+        pred_sample_direction = (1 - alpha_prod_t_prev) ** 0.5 * model_output
+        prev_sample = alpha_prod_t_prev ** 0.5 * pred_original_sample + pred_sample_direction
+        return prev_sample
     
-    def next_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray],index:int):
-        # timestep, next_timestep = min(timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), timestep
-        # alpha_prod_t = self.scheduler.alphas_cumprod[timestep] if timestep >= 0 else self.scheduler.final_alpha_cumprod
-        # alpha_prod_t_next = self.scheduler.alphas_cumprod[next_timestep]
-        # beta_prod_t = 1 - alpha_prod_t
-        # next_original_sample = (sample.to(device) - beta_prod_t.to(device) ** 0.5 * model_output.to(device)) / alpha_prod_t.to(device) ** 0.5
-        # next_sample_direction = (1 - alpha_prod_t_next.to(device)) ** 0.5 * model_output
-        # next_sample = alpha_prod_t_next.to(device) ** 0.5 * next_original_sample.to(device) + next_sample_direction.to(device)
-        # return next_sample
-        alphas = self.ddim_alphas
-        alphas_prev = self.ddim_alphas_prev
-        sqrt_one_minus_alphas = self.ddim_sqrt_one_minus_alphas
-        sigmas = self.ddim_sigmas
-        # select parameters corresponding to the currently considered timestep
-        a_t = torch.full((1, 1, 1, 1), alphas[index], device=device)
-        a_prev = torch.full((1, 1, 1, 1), alphas_prev[index], device=device)
-        sigma_t = torch.full((1, 1, 1, 1), sigmas[index], device=device)
-        sqrt_one_minus_at = torch.full((1, 1, 1, 1), sqrt_one_minus_alphas[index],device=device)
+    # def next_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray],index:int):
+    #     # timestep, next_timestep = min(timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), timestep
+    #     # alpha_prod_t = self.scheduler.alphas_cumprod[timestep] if timestep >= 0 else self.scheduler.final_alpha_cumprod
+    #     # alpha_prod_t_next = self.scheduler.alphas_cumprod[next_timestep]
+    #     # beta_prod_t = 1 - alpha_prod_t
+    #     # next_original_sample = (sample.to(device) - beta_prod_t.to(device) ** 0.5 * model_output.to(device)) / alpha_prod_t.to(device) ** 0.5
+    #     # next_sample_direction = (1 - alpha_prod_t_next.to(device)) ** 0.5 * model_output
+    #     # next_sample = alpha_prod_t_next.to(device) ** 0.5 * next_original_sample.to(device) + next_sample_direction.to(device)
+    #     # return next_sample
+    #     alphas = self.ddim_alphas
+    #     alphas_prev = self.ddim_alphas_prev
+    #     sqrt_one_minus_alphas = self.ddim_sqrt_one_minus_alphas
+    #     sigmas = self.ddim_sigmas
+    #     # select parameters corresponding to the currently considered timestep
+    #     a_t = torch.full((1, 1, 1, 1), alphas[index], device=device)
+    #     a_prev = torch.full((1, 1, 1, 1), alphas_prev[index], device=device)
+    #     sigma_t = torch.full((1, 1, 1, 1), sigmas[index], device=device)
+    #     sqrt_one_minus_at = torch.full((1, 1, 1, 1), sqrt_one_minus_alphas[index],device=device)
 
-        # current prediction for x_0
-        pred_x0 = (sample - sqrt_one_minus_at * model_output) / a_t.sqrt()
-        # direction pointing to x_t
-        dir_xt = (1. - a_prev - sigma_t**2).sqrt() * model_output
-        noise = sigma_t * noise_like(sample.shape, device, False) * 1
-        x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
-        return x_prev
+    #     # current prediction for x_0
+    #     pred_x0 = (sample - sqrt_one_minus_at * model_output) / a_t.sqrt()
+    #     # direction pointing to x_t
+    #     dir_xt = (1. - a_prev - sigma_t**2).sqrt() * model_output
+    #     noise = sigma_t * noise_like(sample.shape, device, False) * 1
+    #     x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
+    #     return x_prev
 
+
+    def next_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray]):
+        timestep, next_timestep = min(timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), timestep
+        alpha_prod_t = self.scheduler.alphas_cumprod[timestep].cuda() if timestep >= 0 else self.scheduler.final_alpha_cumprod
+        alpha_prod_t_next = self.scheduler.alphas_cumprod[next_timestep].cuda()
+        beta_prod_t = 1 - alpha_prod_t
+        next_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
+        next_sample_direction = (1 - alpha_prod_t_next) ** 0.5 * model_output
+        next_sample = alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
+        return next_sample
     
     def get_noise_pred_single(self, latents, t, context,is_uncond=False,uncond_embedding=None,uncond_embedding_c=None):
         # noise_pred = self.model.unet(latents, t, encoder_hidden_states=context)["sample"]
@@ -581,9 +601,9 @@ class NullInversion:
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
         if is_forward:
-            latents = self.next_step(noise_pred, t, latents,index)
+            latents = self.next_step(noise_pred, t, latents)
         else:
-            latents = self.prev_step(noise_pred, t, latents,index)
+            latents = self.prev_step(noise_pred, t, latents)
         return latents
 
     @torch.no_grad()
@@ -613,7 +633,8 @@ class NullInversion:
             latents=self.model.encode_first_stage((image.to(device))).mode().detach()\
                                .repeat(n_samples, 1, 1, 1)
             #ablation
-            self.latents_image=torch.zeros(latents.shape).cuda()
+            # self.latents_image=torch.zeros(latents.shape).cuda()
+            self.latents_image=latents
             latents_2=self.model.encode_first_stage((image.to(device))).mode().detach()\
                                .repeat(n_samples, 1, 1, 1)
             latents_2 = latents_2 * 0.18215
@@ -671,10 +692,23 @@ class NullInversion:
         # print(self.model.num_timesteps)
         for i in range(NUM_DDIM_STEPS):
             t = self.model.scheduler.timesteps[len(self.model.scheduler.timesteps) - i - 1]
+            t=t+1
             t=torch.full((1,), t, device=device, dtype=torch.long)
             noise_pred = self.get_noise_pred_single(latent, t, cond_embeddings)
-            latent = self.next_step(noise_pred, t, latent,len(self.model.scheduler.timesteps) - i - 1)
+            # latent = self.next_step(noise_pred, t, latent,len(self.model.scheduler.timesteps) - i - 1)
+            latent=self.next_step(noise_pred, t, latent)
+
+            # image = model.decode_first_stage(latent)
+            # image=torch.clamp((image / 2 + 0.5), min=0.0, max=1.0)
+            # image=image.cpu().permute(0, 2, 3, 1).numpy()
+            # image=(image * 255).astype(np.uint8)
+            # print("-----------------834",image)
+            # image=Image.fromarray(image[0])
+            # image_path="./test_images/"+str(i)+".png"
+            # image.save(image_path)
+
             all_latent.append(latent)
+        # exit()
         return all_latent
 
     @property
@@ -703,13 +737,15 @@ class NullInversion:
             optimizer = Adam([uncond_embeddings,uncond_embeddings_c], lr=1e-2 * (1. - i / 100.))
             latent_prev = latents[len(latents) - i - 2]
             t = self.model.scheduler.timesteps[i]
+            t=t+1
+            print(t)
             t=torch.full((1,), t, device=device, dtype=torch.long)
             with torch.no_grad():
                 noise_pred_cond = self.get_noise_pred_single(latent_cur, t, cond_embeddings)
             for j in range(num_inner_steps):
                 noise_pred_uncond = self.get_noise_pred_single(latent_cur, t, cond_embeddings, True, uncond_embeddings,uncond_embeddings_c)
                 noise_pred = noise_pred_uncond + GUIDANCE_SCALE * (noise_pred_cond - noise_pred_uncond)
-                latents_prev_rec = self.prev_step(noise_pred, t, latent_cur,i)
+                latents_prev_rec = self.prev_step(noise_pred, t, latent_cur)
                 loss = nnf.mse_loss(latents_prev_rec, latent_prev)
                 optimizer.zero_grad()
                 loss.backward()
@@ -900,7 +936,7 @@ def text2image_ldm_stable_origin(
                         .repeat(n_samples, 1, 1, 1)
     
     #ablation
-    latents_c=torch.zeros(latents_c.shape).cuda()
+    # latents_c=torch.zeros(latents_c.shape).cuda()
     for i, t in enumerate(tqdm(model.scheduler.timesteps[-start_time:])):
         # if uncond_embeddings_ is None:
         #     context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
@@ -912,11 +948,11 @@ def text2image_ldm_stable_origin(
         cond["c_concat"]=[torch.cat([uncond_embeddings_c[i],latents_c])]
         cond["c_crossattn"]=[torch.cat([uncond_embeddings[i],c])]
 
-        latents = ptp_utils.diffusion_step(model, controller, latents, cond, t, guidance_scale, low_resource=False)
+        latents = ptp_utils.diffusion_step(model, controller, latents, cond, t+1, guidance_scale, low_resource=False)
         
     if return_type == 'image':
-        latents = 0.1825*latents
-        print("--------------917-----------")
+        # latents = 0.1825*latents
+        # print("--------------917-----------")
         image = model.decode_first_stage(latents)
         image=torch.clamp((image / 2 + 0.5), min=0.0, max=1.0)
         image=image.cpu().permute(0, 2, 3, 1).numpy()
