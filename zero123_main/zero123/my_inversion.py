@@ -612,11 +612,13 @@ class NullInversion:
             n_samples=1
             latents=self.model.encode_first_stage((image.to(device))).mode().detach()\
                                .repeat(n_samples, 1, 1, 1)
-            self.latents_image=latents
-            latents=self.model.encode_first_stage((image.to(device))).mode().detach()\
+            #ablation
+            self.latents_image=torch.zeros(latents.shape).cuda()
+            latents_2=self.model.encode_first_stage((image.to(device))).mode().detach()\
                                .repeat(n_samples, 1, 1, 1)
-            latents = latents * 0.18215
-        return latents
+            latents_2 = latents_2 * 0.18215
+            # latents_2=latents_2/(1/0.18215)
+        return latents_2
 
     @torch.no_grad()
     def init_prompt(self, prompt: str):
@@ -648,11 +650,9 @@ class NullInversion:
         c = torch.cat([c, T], dim=-1)
         c = model.cc_projection(c)
         self.prompt=c
+        u_c = torch.cat([u_c, T], dim=-1)
+        u_c = model.cc_projection(u_c)
         self.context=torch.cat([u_c,c])
-
-
-
-
 
 
 
@@ -809,7 +809,9 @@ def text2image_ldm_stable(
     # else:
     #     uncond_embeddings_ = None
 
-    latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)
+    # latent=None
+    print("------------------------813----------------------------------")
+    latent, latents = ptp_utils.init_latent(None, model, height, width, generator, batch_size)
     model.scheduler.set_timesteps(num_inference_steps)
     n_samples=1
     latents_c=model.encode_first_stage((prompt.to(device))).mode().detach()\
@@ -820,13 +822,101 @@ def text2image_ldm_stable(
         # else:
         #     context = torch.cat([uncond_embeddings_, text_embeddings])
         cond={}
+        # cond["c_concat"]=[torch.cat([uncond_embeddings_c[i],latents_c])]
+        # cond["c_crossattn"]=[torch.cat([uncond_embeddings[i],c])]
+        # cond["c_concat"]=[torch.cat([torch.zeros(latents_c.shape).to(device),latents_c])]
+        # cond["c_crossattn"]=[torch.cat([torch.zeros(c.shape).to(device),c])]
+
+        latents = ptp_utils.diffusion_step(model, controller, latents, cond, t, guidance_scale, low_resource=False)
+        
+    if return_type == 'image':
+        # latents = 1/0.1825*latents.detach()
+        image = model.decode_first_stage(latents)
+        image=torch.clamp((image / 2 + 0.5), min=0.0, max=1.0)
+        image=image.cpu().permute(0, 2, 3, 1).numpy()
+        image=(image * 255).astype(np.uint8)
+        print("-----------------834",image)
+    else:
+        image = latents
+    return image, latent
+
+
+@torch.no_grad()
+def text2image_ldm_stable_origin(
+    model,
+    prompt,
+    controller,
+    num_inference_steps: int = 50,
+    guidance_scale: Optional[float] = 3.0,
+    generator: Optional[torch.Generator] = None,
+    latent: Optional[torch.FloatTensor] = None,
+    uncond_embeddings=None,
+    uncond_embeddings_c=None,
+    start_time=50,
+    return_type='image'
+):
+    batch_size = 1
+    # ptp_utils.register_attention_control(model, controller)
+    height = width = 256
+    
+    # text_input = model.tokenizer(
+    #     prompt,
+    #     padding="max_length",
+    #     max_length=model.tokenizer.model_max_length,
+    #     truncation=True,
+    #     return_tensors="pt",
+    # )
+    # text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
+    # max_length = text_input.input_ids.shape[-1]
+    #add for zero123
+    # print(image_gt)
+    # print(image_gt.shape)
+
+#需要修改
+    n_samples=1
+    c = model.get_learned_conditioning(prompt).tile(n_samples, 1, 1)
+    T = torch.tensor([0, 0, 0, 0])
+    T = T[None, None, :].repeat(n_samples, 1, 1).to(c.device)
+    c = torch.cat([c, T], dim=-1)
+    c = model.cc_projection(c)
+    uc = model.get_learned_conditioning(torch.zeros(prompt.shape).to(prompt.device)).tile(n_samples, 1, 1)
+    u_c = torch.cat([uc, T], dim=-1)
+    uc = model.cc_projection(u_c)
+
+
+    # if uncond_embeddings is None:
+    #     uncond_input = model.tokenizer(
+    #         [""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt"
+    #     )
+    #     uncond_embeddings_ = model.text_encoder(uncond_input.input_ids.to(model.device))[0]
+    # else:
+    #     uncond_embeddings_ = None
+    # latent=None
+
+    latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)
+    model.scheduler.set_timesteps(num_inference_steps)
+    n_samples=1
+    latents_c=model.encode_first_stage((prompt.to(device))).mode().detach()\
+                        .repeat(n_samples, 1, 1, 1)
+    
+    #ablation
+    latents_c=torch.zeros(latents_c.shape).cuda()
+    for i, t in enumerate(tqdm(model.scheduler.timesteps[-start_time:])):
+        # if uncond_embeddings_ is None:
+        #     context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
+        # else:
+        #     context = torch.cat([uncond_embeddings_, text_embeddings])
+        cond={}
+        # cond["c_concat"]=[torch.cat([torch.zeros(latents_c.shape).to(latents_c.device),latents_c])]
+        # cond["c_crossattn"]=[torch.cat([uc,c])]
         cond["c_concat"]=[torch.cat([uncond_embeddings_c[i],latents_c])]
         cond["c_crossattn"]=[torch.cat([uncond_embeddings[i],c])]
 
         latents = ptp_utils.diffusion_step(model, controller, latents, cond, t, guidance_scale, low_resource=False)
         
     if return_type == 'image':
-        latents = 1 / 0.18215 * latents
+        latents = 0.1825*latents
+        print("--------------917-----------")
         image = model.decode_first_stage(latents)
         image=torch.clamp((image / 2 + 0.5), min=0.0, max=1.0)
         image=image.cpu().permute(0, 2, 3, 1).numpy()
@@ -837,12 +927,14 @@ def text2image_ldm_stable(
 
 
 
+
+
 def run_and_display(prompts=None, controller=None, latent=None, run_baseline=False, generator=None, uncond_embeddings=None, verbose=True,uncond_embeddings_c=None,prefix='inversion'):
     if run_baseline:
         print("w.o. prompt-to-prompt")
         images, latent = run_and_display(prompts, EmptyControl(), latent=latent, run_baseline=False, generator=generator)
         print("with prompt-to-prompt")
-    images, x_t = text2image_ldm_stable(model, prompts, controller, latent=latent, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings,uncond_embeddings_c=uncond_embeddings_c)
+    images, x_t = text2image_ldm_stable_origin(model, prompts, controller, latent=latent, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings,uncond_embeddings_c=uncond_embeddings_c)
     if verbose:
         ptp_utils.view_images(images, prefix=prefix)
     return images, x_t
@@ -893,10 +985,11 @@ if __name__ == '__main__':
     # tokenizer = ldm_stable.tokenizer
 
     config='/home/chenyangsen/kinneyyang/Adversarial_Content_Attack/zero123_main/zero123/configs/sd-objaverse-finetune-c_concat-256.yaml'
-    ckpt='/home/chenyangsen/kinneyyang/threestudio-main/load/zero123/zero123-xl.ckpt'
+    ckpt='/home/chenyangsen/kinneyyang/threestudio-main/load/zero123/stable_zero123.ckpt'
     config = OmegaConf.load(config)
     model = load_model_from_config(config, ckpt, device=device)
     # print(model)
+    # exit()
     model.scheduler=scheduler
     null_inversion = NullInversion(model)
 
@@ -935,10 +1028,11 @@ if __name__ == '__main__':
         image_gt=torch.clamp((image_gt + 1.0) / 2.0, min=0.0, max=1.0)
         image_gt=image_gt.cpu().permute(0, 2, 3, 1).numpy()
         image_gt=(image_gt * 255).astype(np.uint8)
-        print(image_gt.shape)
         image_enc=torch.clamp((image_enc + 1.0) / 2.0, min=0.0, max=1.0)
         image_enc=image_enc.cpu().permute(0, 2, 3, 1).numpy()
         image_enc=(image_enc * 255).astype(np.uint8)
+        # print("942-------------",image_enc)
+        # print("943-------------",image_inv[0]-image_enc[0])
         print("showing from left to right: the ground truth image, the vq-autoencoder reconstruction, the null-text inverted image")
         ptp_utils.view_images([image_enc[0]], prefix='1/pair/%d' % (idx))
         ptp_utils.view_images([image_gt[0]], prefix='1/original/%d' % (idx))
